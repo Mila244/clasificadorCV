@@ -1,6 +1,8 @@
 import streamlit as st
 import pdfplumber
 import re
+import joblib
+import os
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -8,7 +10,7 @@ from sklearn.model_selection import GridSearchCV
 import nltk
 from nltk.corpus import stopwords
 
-# Descargar las stopwords si no las tienes (solo necesitas hacerlo una vez)
+# Descargar las stopwords si no las tienes (solo la primera vez)
 try:
     stopwords.words('spanish')
 except LookupError:
@@ -20,26 +22,64 @@ st.set_page_config(
     page_icon="🩺",
     layout="centered"
 )
+# Luego carga tu CSS
+with open("styles.css", encoding="utf-8") as f:
+    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# --- LOGO Y ENCABEZADO ---
-# Asegúrate de tener 'logo.png' en la misma carpeta o proporciona la ruta correcta.
-st.image("logo.png", width=150)
-st.markdown("<h1 style='text-align: center; color: #2c3e50;'>Clasificador de Currículos</h1>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align: center; color: gray;'>Centro de Salud – Selección por Especialidad</h4>", unsafe_allow_html=True)
-st.write("---")
+# --- FUNCIONES ---
 
-# --- FUNCION DE PREPROCESAMIENTO MEJORADA ---
-def limpiar_texto(texto):
-    texto = texto.lower()  # pasar a minúsculas
-    texto = re.sub(r'\n', ' ', texto)  # quitar saltos de línea
-    texto = re.sub(r'[^\w\s]', ' ', texto)  # eliminar caracteres especiales
-    texto = re.sub(r'\d+', '', texto) # Eliminar números
-    texto = re.sub(r'\s+', ' ', texto)  # eliminar espacios extras
-    
-    # Eliminar stop words
+def limpiar_texto(texto: str) -> str:
+    """Preprocesa el texto: minúsculas, quitar saltos, signos, números, stopwords."""
+    texto = texto.lower()
+    texto = re.sub(r'\n', ' ', texto)
+    texto = re.sub(r'[^\w\s]', ' ', texto)
+    texto = re.sub(r'\d+', '', texto)
+    texto = re.sub(r'\s+', ' ', texto)
     stop_words = set(stopwords.words('spanish'))
     texto_sin_stopwords = [word for word in texto.split() if word not in stop_words]
     return " ".join(texto_sin_stopwords).strip()
+
+def extraer_texto_pdf(archivo) -> str:
+    """Extrae texto de un archivo PDF usando pdfplumber."""
+    texto = ""
+    try:
+        with pdfplumber.open(archivo) as pdf:
+            for pagina in pdf.pages:
+                contenido = pagina.extract_text()
+                if contenido:
+                    texto += contenido + "\n"
+    except Exception as e:
+        st.error(f"Error al extraer texto del PDF: {e}")
+    return texto
+
+def entrenar_o_cargar_modelo(textos, areas, ruta_modelo="modelo_cv.pkl"):
+    """Entrena el modelo si no existe, sino carga el modelo guardado."""
+    if os.path.exists(ruta_modelo):
+        modelo = joblib.load(ruta_modelo)
+        st.info("Modelo cargado desde archivo.")
+    else:
+        pipeline = Pipeline([
+            ('tfidf', TfidfVectorizer()),
+            ('logreg', LogisticRegression(max_iter=2000, random_state=42, solver='liblinear'))
+        ])
+
+        parameters = {
+            'tfidf__ngram_range': [(1, 1), (1, 2)],
+            'tfidf__max_df': [0.7, 0.85, 0.95],
+            'tfidf__min_df': [1, 2],
+            'logreg__C': [0.1, 1, 10],
+            'logreg__penalty': ['l1', 'l2']
+        }
+
+        st.info("Entrenando modelo, esto puede tardar unos segundos...")
+        grid_search = GridSearchCV(pipeline, parameters, cv=5, n_jobs=-1, verbose=0)
+        grid_search.fit(textos, areas)
+
+        modelo = grid_search.best_estimator_
+        joblib.dump(modelo, ruta_modelo)
+        st.success(f"Modelo entrenado y guardado con mejores parámetros: {grid_search.best_params_}")
+        st.success(f"Mejor puntuación de validación cruzada: {grid_search.best_score_:.4f}")
+    return modelo
 
 # --- DATOS DE ENTRENAMIENTO MEJORADOS Y EXPANDIDOS ---
 # Es crucial tener muchos más ejemplos y más diversos para cada categoría.
@@ -112,40 +152,57 @@ areas = [
     "Limpieza", "Limpieza", "Limpieza", "Limpieza", "Limpieza", "Limpieza"
 ]
 
-# --- ENTRENAMIENTO DEL MODELO CON OPTIMIZACIÓN (GRIDSEARCHCV) ---
-# Definimos el pipeline
-pipeline = Pipeline([
-    ('tfidf', TfidfVectorizer()),
-    ('logreg', LogisticRegression(max_iter=2000, random_state=42, solver='liblinear')) # Aumentamos max_iter y elegimos solver
-])
+# --- INTERFAZ DE USUARIO ELEGANTE ---
 
-# Definimos los parámetros a probar para GridSearchCV
-# Experimenta con estos valores para encontrar los mejores para tus datos.
-parameters = {
-    'tfidf__ngram_range': [(1, 1), (1, 2)], # Probar con unigramas y bigramas
-    'tfidf__max_df': [0.7, 0.85, 0.95],   # Ignorar términos que aparecen en demasiados documentos
-    'tfidf__min_df': [1, 2],            # Ignorar términos que aparecen en muy pocos documentos
-    'logreg__C': [0.1, 1, 10],          # Parámetro de regularización de Logistic Regression
-    'logreg__penalty': ['l1', 'l2']     # Tipo de regularización
-}
+# Crear columnas para alinear logo + título
+col1, col2 = st.columns([1, 4])
 
-st.write("Entrenando el modelo, por favor espere...")
-# Ejecutamos GridSearchCV
-# cv=5 significa 5-fold cross-validation
-# n_jobs=-1 usa todos los núcleos disponibles de la CPU
-grid_search = GridSearchCV(pipeline, parameters, cv=5, n_jobs=-1, verbose=0)
-grid_search.fit(textos, areas)
+with col1:
+    st.image("logo.png", width=130)
 
-# El mejor estimador encontrado por GridSearchCV será nuestro modelo final
-modelo = grid_search.best_estimator_
-st.write(f"Modelo entrenado con los mejores parámetros: **{grid_search.best_params_}**")
-st.write(f"Mejor puntuación de validación cruzada: **{grid_search.best_score_:.4f}**")
-st.write("---")
+with col2:
+    st.markdown("""
+        <style>
+        body
+        .titulo-container h1 {
+            margin-bottom: 0;
+            font-size: 2.8em;
+            color: #2c3e50;
+            animation: slideDown 1s ease-out;
+        }
+        .titulo-container h4 {
+            margin-top: 2px;
+            color: gray;
+            font-weight: normal;
+            animation: fadeIn 2s ease-in;
+        }
+
+        @keyframes slideDown {
+            from { transform: translateY(-30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        </style>
+
+        <div class="titulo-container">
+            <h1>Clasificador de Currículos</h1>
+            <h4>Centro de Salud – Selección por Especialidad</h4>
+        </div>
+    """, unsafe_allow_html=True)
+
+st.markdown("<hr>", unsafe_allow_html=True)
 
 
-# --- ESTILO PERSONALIZADO PARA LA CARGA DE ARCHIVO ---
+# Carga o entrenamiento del modelo
+modelo = entrenar_o_cargar_modelo(textos, areas)
+
 st.markdown("""
     <style>
+    /* Ocultar elementos innecesarios */
     .css-1y4p8pa, .css-1uixxvy, .e1b2p2ww0 {
         display: none !important;
     }
@@ -155,47 +212,55 @@ st.markdown("""
 st.markdown("### 📄 Arrastra y suelta tu archivo aquí")
 st.markdown("_Límite: 200MB por archivo • Formato: PDF_")
 
-# --- CARGA DE ARCHIVO ---
 archivo = st.file_uploader("Selecciona un archivo", type="pdf", label_visibility="collapsed")
 
-# --- PROCESAMIENTO Y CLASIFICACIÓN ---
 if archivo is not None:
     with st.spinner('Extrayendo texto del PDF...'):
-        texto_extraido = ""
-        try:
-            with pdfplumber.open(archivo) as pdf:
-                for pagina in pdf.pages:
-                    contenido = pagina.extract_text()
-                    if contenido:
-                        texto_extraido += contenido + "\n"
-        except Exception as e:
-            st.error(f"Error al extraer texto del PDF: {e}. Asegúrate de que el PDF no esté protegido o sea una imagen.")
-            texto_extraido = "" # Asegurarse de que el texto esté vacío en caso de error
+        texto_extraido = extraer_texto_pdf(archivo)
 
     if texto_extraido:
+        st.markdown("#### Texto extraído del CV (para revisión):")
+        st.text_area("Texto extraído", texto_extraido, height=250, disabled=True)
+
         texto_limpio = limpiar_texto(texto_extraido)
 
-        if texto_limpio:
+        if not texto_limpio:
+            st.warning("⚠️ No se pudo extraer texto significativo después de la limpieza. Revisa el PDF o usa uno con texto legible.")
+        else:
             if st.button("🔍 Clasificar CV"):
                 prob = modelo.predict_proba([texto_limpio])[0]
                 pred = modelo.classes_[prob.argmax()]
                 max_prob = prob.max()
 
-                # Ajustar el umbral de confianza
-                # Puedes experimentar con este valor (ej. 0.5, 0.6, 0.7)
-                umbral_confianza = 0.55 
-                
+                umbral_confianza = 0.55
+
                 if max_prob >= umbral_confianza:
                     st.success(f"🗂️ Área sugerida para el candidato: **{pred}** (Confianza: {max_prob*100:.2f}%)")
                 else:
-                    st.warning(f"⚠️ No se pudo clasificar con suficiente confianza ({max_prob*100:.2f}% < {umbral_confianza*100:.2f}%). Por favor revise el CV o considere ajustar el umbral.")
+                    st.warning(f"⚠️ Clasificación con baja confianza: {max_prob*100:.2f}%. Considera revisar el CV o ajustar el umbral.")
 
                 st.markdown("### 📊 Detalle de Probabilidades")
-                # Ordenar las probabilidades de mayor a menor para una mejor visualización
                 sorted_probs = sorted(zip(modelo.classes_, prob), key=lambda x: x[1], reverse=True)
-                for label, p in sorted_probs:
-                    st.write(f"- **{label}**: {p*100:.2f}%")
-        else:
-            st.warning("⚠️ No se pudo extraer texto significativo del PDF después de la limpieza. Asegúrate de que el archivo contiene texto legible y no es una imagen escaneada.")
+                # Crear dos columnas
+                col1, col2 = st.columns(2)
+                # Dividir las probabilidades en dos mitades para distribuir en columnas
+                mitad = len(sorted_probs) // 2 + len(sorted_probs) % 2  # Para números impares, una columna tendrá un elemento más
+                for i, (area, conf) in enumerate(sorted_probs):
+                    porcentaje = conf * 100
+                    bar_color = "#4caf50" if area == pred else "#2196f3"
+                    barra_html = f"""
+                    <div style="background-color: #ddd; border-radius: 10px; width: 100%; height: 20px;">
+                    <div style="background-color: {bar_color}; width: {porcentaje}%; height: 100%; border-radius: 10px;"></div>
+                    </div>
+                    """
+                    if i < mitad:
+                        with col1:
+                            st.write(f"**{area}:** {porcentaje:.2f}%")
+                            st.markdown(barra_html, unsafe_allow_html=True)
+                    else:
+                        with col2:
+                            st.write(f"**{area}:** {porcentaje:.2f}%")
+                            st.markdown(barra_html, unsafe_allow_html=True)
+                    
     else:
-        st.warning("⚠️ No se pudo extraer texto del PDF. El archivo podría estar vacío, protegido o ser una imagen escaneada.")
+        st.warning("⚠️ No se pudo extraer texto del PDF. El archivo podría estar protegido o ser una imagen escaneada.")

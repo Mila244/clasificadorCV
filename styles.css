@@ -1,0 +1,44 @@
+/* Fondo general */
+body {
+    background: linear-gradient(to right, #f7f9fb, #e3f2fd);
+    color: #2c3e50;
+    font-family: 'Segoe UI', sans-serif;
+}
+
+/* Títulos */
+h1, h2, h4 {
+    color: #1a237e;
+    text-align: center;
+}
+
+/* Línea separadora */
+hr {
+    border: 1px solid #42a5f5;
+}
+
+/* Botones */
+button {
+    background-color: #1e88e5 !important;
+    color: white !important;
+    border-radius: 12px !important;
+}
+
+/* Caja del PDF */
+.stFileUploader {
+    background-color: #e3f2fd;
+    border: 2px dashed #90caf9;
+    padding: 10px;
+    border-radius: 10px;
+}
+
+/* Resultado del modelo */
+div.stAlert {
+    background-color: #e8f5e9;
+    border-left: 5px solid #43a047;
+}
+
+/* Footer oculto */
+footer {visibility: hidden;}
+
+/* Ocultar menú superior */
+#MainMenu {visibility: hidden;}
